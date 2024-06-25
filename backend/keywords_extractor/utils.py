@@ -25,6 +25,7 @@ The script consists of the following main functions:
 5. search_and_extract_keywords(keyword): Combines the previous functions to perform a search for a keyword,
 fetch the top result pages, and extract the most common trigrams from the content.
 """
+
 import asyncio
 import aiohttp
 from bs4 import BeautifulSoup
@@ -58,7 +59,7 @@ async def fetch(session, url, timeout=10):
 
 
 async def get_soup(session, url):
-   """
+    """
     Fetch the HTML content and parse it using BeautifulSoup.
 
     Args:
@@ -66,9 +67,9 @@ async def get_soup(session, url):
         url (str): The URL to fetch content from.
 
     Returns:
-        BeautifulSoup: The BeautifulSoup object containing the parsed HTML content, or None if fetching fails.
+        BeautifulSoup: The BeautifulSoup object containing
+        the parsed HTML content, or None if fetching fails.
     """
-
     html_content = await fetch(session, url)
     if html_content:
         return BeautifulSoup(html_content, "html.parser")
