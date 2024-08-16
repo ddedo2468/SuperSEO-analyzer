@@ -35,7 +35,7 @@ import nltk
 from datetime import datetime, timedelta
 
 # Ensure nltk data is downloaded
-nltk.download("punkt")
+# nltk.download("punkt")
 
 
 async def fetch(session, url, timeout=10):
