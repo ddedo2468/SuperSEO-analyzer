@@ -1,54 +1,52 @@
 """
-This script performs web scraping and text analysis to extract
-the most common trigrams (three-word sequences) from the body text of web pages.
+keywords_extractor.py
 
-The main functionalities include:
-1. Performing asynchronous HTTP requests to fetch the HTML content of web pages.
-2. Parsing HTML content using BeautifulSoup to extract body text.
-3. Tokenizing and filtering text to remove stopwords and non-alphabetical characters.
-4. Extracting the most common trigrams from the filtered text.
-5. Performing Google searches to get the top search result links for a given keyword.
-6. Combining the above functionalities to perform a search for a keyword,
-fetch the top result pages, and extract the most common trigrams from the content.
+This module provides functions for extracting semantic keywords from web articles
+based on a search keyword. It uses asynchronous requests to fetch articles and 
+Natural Language Processing (NLP) techniques to analyze the content.
 
-Dependencies:
-- asyncio for asynchronous programming.
-- aiohttp for asynchronous HTTP requests.
-- BeautifulSoup (bs4) for parsing HTML content.
-- nltk for natural language processing, specifically tokenization and trigram extraction.
+Modules:
+- asyncio: To handle asynchronous operations.
+- aiohttp: For making asynchronous HTTP requests.
+- BeautifulSoup: For parsing HTML content.
+- nltk: For natural language processing tasks.
+- newspaper3k: For extracting article content.
+- spacy: For semantic similarity calculations.
 
-The script consists of the following main functions:
-1. fetch(session, url, timeout=10): Fetches the content of a URL.
-2. get_soup(session, url): Fetches and parses HTML content from a URL.
-3. get_keywords(soup): Extracts the most common trigrams from the body text of the HTML content.
-4. get_top_links(keyword, session): Fetches the top search result links from Google for a given keyword.
-5. search_and_extract_keywords(keyword): Combines the previous functions to perform a search for a keyword,
-fetch the top result pages, and extract the most common trigrams from the content.
 """
 
 import asyncio
 import aiohttp
 from bs4 import BeautifulSoup
 from nltk.tokenize import word_tokenize
-from nltk import trigrams
+from nltk.util import trigrams
 import nltk
-from datetime import datetime, timedelta
+from urllib.parse import urlparse, parse_qs
+from nltk.corpus import stopwords
+from sklearn.feature_extraction.text import TfidfVectorizer
+import spacy
+import operator
+from concurrent.futures import ThreadPoolExecutor
+import newspaper
 
 # Ensure nltk data is downloaded
-# nltk.download("punkt")
+nltk.download("punkt", quiet=True)
+nltk.download("stopwords", quiet=True)
 
+# Load spaCy's medium English model for semantic similarity
+nlp = spacy.load("en_core_web_md")
 
 async def fetch(session, url, timeout=10):
     """
-    Fetch the content of a given URL using aiohttp.
+    Asynchronously fetches the HTML content of a given URL.
 
-    Args:
-        session (aiohttp.ClientSession): The aiohttp session object.
-        url (str): The URL to fetch content from.
-        timeout (int): The timeout period in seconds.
+    Parameters:
+        session (aiohttp.ClientSession): The aiohttp session for making requests.
+        url (str): The URL to fetch.
+        timeout (int): The timeout duration in seconds (default is 10).
 
     Returns:
-        str: The HTML content of the URL, or None if a timeout occurs.
+        str: The HTML content of the response if successful, None otherwise.
     """
     try:
         async with session.get(url, timeout=timeout) as response:
@@ -58,70 +56,14 @@ async def fetch(session, url, timeout=10):
         return None
 
 
-async def get_soup(session, url):
+async def get_top_links(keyword, session, num_results=10):
     """
-    Fetch the HTML content and parse it using BeautifulSoup.
+    Fetches the top search results from Google for a given keyword.
 
-    Args:
-        session (aiohttp.ClientSession): The aiohttp session object.
-        url (str): The URL to fetch content from.
-
-    Returns:
-        BeautifulSoup: The BeautifulSoup object containing
-        the parsed HTML content, or None if fetching fails.
-    """
-    html_content = await fetch(session, url)
-    if html_content:
-        return BeautifulSoup(html_content, "html.parser")
-    return None
-
-
-def get_keywords(soup):
-    """
-    Extract the most common trigrams (three-word sequences) from the body text of the HTML content.
-
-    Args:
-        soup (BeautifulSoup): The BeautifulSoup object containing the parsed HTML content.
-
-    Returns:
-        dict: A dictionary of the most common trigrams.
-    """
-    if soup is None:
-        return {}
-
-    try:
-        body = soup.find("body")
-        if body:
-            body_text = body.get_text().lower()
-        else:
-            body_text = soup.get_text().lower()
-    except AttributeError:
-        body_text = ""
-
-    words = [word for word in word_tokenize(body_text) if word.isalpha()]
-
-    with open("english", "r") as file:
-        stopwords = set(line.strip() for line in file)
-
-    filtered_words = [word for word in words if word not in stopwords]
-    new_trigrams = list(trigrams(filtered_words))
-    tri_freq = nltk.FreqDist(new_trigrams).most_common(3)
-
-    most_common_trigram_strings = [" ".join(trigram) for trigram, freq in tri_freq]
-    keywords_dict = {
-        str(i + 1): keyword for i, keyword in enumerate(most_common_trigram_strings)
-    }
-
-    return keywords_dict
-
-
-async def get_top_links(keyword, session):
-    """
-    Fetch the top search result links from Google for a given keyword.
-
-    Args:
-        keyword (str): The search keyword.
-        session (aiohttp.ClientSession): The aiohttp session object.
+    Parameters:
+        keyword (str): The keyword to search for.
+        session (aiohttp.ClientSession): The aiohttp session for making requests.
+        num_results (int): The number of top search results to return (default is 10).
 
     Returns:
         list: A list of URLs of the top search results.
@@ -131,7 +73,7 @@ async def get_top_links(keyword, session):
     }
 
     keyword = keyword.replace(" ", "+")
-    url = f"https://www.google.com/search?q={keyword}"
+    url = f"https://www.google.com/search?q={keyword}&hl=en&num={num_results}"
 
     async with session.get(url, headers=header) as response:
         if response.status != 200:
@@ -139,36 +81,117 @@ async def get_top_links(keyword, session):
 
         html_content = await response.text()
         soup = BeautifulSoup(html_content, features="lxml")
-        links = [
-            a["href"]
-            for g in soup.find_all("div", {"class": "g"})
-            for a in g.find_all("a")
-            if a
-        ]
+
+        links = []
+        for g in soup.find_all("div", {"class": "g"}):
+            for a in g.find_all("a"):
+                href = a.get("href")
+                if href and href.startswith("https://") and not href.startswith("https://translate.google.com") \
+                    and not href.startswith("https://youtube.com/"):
+                    if href.startswith("https://www.google.com/url?"):
+                        parsed = urlparse(href)
+                        actual_url = parse_qs(parsed.query).get('q', [None])[0]
+                        if actual_url and actual_url.startswith("https://"):
+                            links.append(actual_url)
+                    else:
+                        links.append(href)
+
+                    if len(links) == num_results:
+                        return links
+
         return links
 
-
-async def search_and_extract_keywords(keyword):
+def scrape_article(link, lang='english'):
     """
-    Perform a Google search for a given keyword, extract the content from the top search results,
-    and extract the most common trigrams from the body text.
+    Scrapes the content of a given article URL.
 
-    Args:
-        keyword (str): The search keyword.
+    Parameters:
+        link (str): The URL of the article to scrape.
+        lang (str): The language of the stopwords to be used (default is 'english').
 
     Returns:
-        list: A list of unique keywords extracted from the top search result pages.
+        dict: A dictionary containing the article's link, trigrams of the content,
+              and the full text of the article, or None if an error occurs.
+    """
+    article = newspaper.Article(link, keep_article_html=True)
+    try:
+        article.download()
+        article.parse()
+        content = article.text
+
+        text = content.lower()
+        word_tokens = word_tokenize(text)
+        stop_words = set(stopwords.words(lang))
+        filtered_text = [word for word in word_tokens if word.isalpha() and word not in stop_words]
+
+
+        trigram_tokens = list(trigrams(filtered_text))
+
+        return {
+            "link": link,
+            "trigrams": [' '.join(trigram) for trigram in trigram_tokens],
+            "text": content
+        }
+    except Exception as e:
+        # print(f"Error scraping {link}: {str(e)}")
+        return None
+
+async def search_and_extract_keywords(keyword, num_results=10, lang='english'):
+    """
+    Searches for articles related to a keyword and extracts semantic keywords from them.
+
+    Parameters:
+        keyword (str): The keyword to search for.
+        num_results (int): The number of articles to process (default is 10).
+        lang (str): The language of the stopwords to be used (default is 'english').
+
+    Returns:
+        list: A list of the top semantic keywords (trigrams) extracted from the articles.
     """
     async with aiohttp.ClientSession() as session:
-        links = await get_top_links(keyword, session)
-        tasks = [get_soup(session, link) for link in links]
-        soups = await asyncio.gather(*tasks)
+        links = await get_top_links(keyword, session, num_results)
 
-        all_keywords = []
-        for soup in soups:
-            if soup:  # Only process if soup is not None
-                keywords = get_keywords(soup)
-                all_keywords.extend(keywords.values())
+        with ThreadPoolExecutor() as executor:
+            tasks = [asyncio.get_running_loop().run_in_executor(executor, scrape_article, link, lang) for link in links]
+            results = await asyncio.gather(*tasks)
 
-        unique_keywords = list(set(all_keywords))
-        return unique_keywords
+        all_trigrams = []
+        documents = []
+
+        for result in results:
+            if result:
+                all_trigrams.extend(result['trigrams'])
+                documents.append(result['text'])
+
+
+        tfidf_vectorizer = TfidfVectorizer()
+        tfidf_matrix = tfidf_vectorizer.fit_transform(documents)
+        feature_names = tfidf_vectorizer.get_feature_names_out()
+
+
+        top_trigrams = compute_semantic_similarity(all_trigrams, keyword)
+
+        return top_trigrams
+
+
+def compute_semantic_similarity(trigrams, keyword):
+    """
+    Computes the semantic similarity between trigrams and a given keyword.
+
+    Parameters:
+        trigrams (list): A list of trigram strings to evaluate.
+        keyword (str): The keyword to compare against.
+
+    Returns:
+        list: A list of the top 15 trigrams sorted by their semantic similarity to the keyword.
+    """
+    keyword_doc = nlp(keyword)
+    trigram_docs = list(nlp.pipe(trigrams))
+
+    trigram_scores = {trigram: keyword_doc.similarity(trigram_doc)
+                      for trigram, trigram_doc in zip(trigrams, trigram_docs)}
+
+    sorted_trigrams = sorted(trigram_scores.items(), key=operator.itemgetter(1), reverse=True)
+
+
+    return [trigram for trigram, _ in sorted_trigrams[:15]]

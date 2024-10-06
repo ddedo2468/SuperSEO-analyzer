@@ -21,22 +21,24 @@ class KeywordSerializer(serializers.ModelSerializer):
             existing_keyword = Keyword.objects.get(main_keyword=main_keyword)
             one_month_ago = timezone.now() - timedelta(days=30)
 
-            if existing_keyword.updated_at > one_month_ago:
-                # Return existing keyword if updated recently
-                return existing_keyword
-            else:
-                # Perform a new analysis if the existing keyword is older than one month
-                new_results = asyncio.run(search_and_extract_keywords(main_keyword))
+            if existing_keyword:
 
-                if not new_results:
-                    raise serializers.ValidationError(
-                        "No results found for the keyword."
-                    )
+                if existing_keyword.updated_at > one_month_ago:
+                    # Return existing keyword if updated recently
+                    return existing_keyword
+                else:
+                    # Perform a new analysis if the existing keyword is older than one month
+                    new_results = asyncio.run(search_and_extract_keywords(main_keyword))
 
-                existing_keyword.results = new_results
-                existing_keyword.save()
+                    if not new_results:
+                        raise serializers.ValidationError(
+                            "No results found for the keyword."
+                        )
 
-                return existing_keyword
+                    existing_keyword.results = new_results
+                    existing_keyword.save()
+
+                    return existing_keyword
         except Keyword.DoesNotExist:
             # If keyword does not exist, create a new one
             new_results = asyncio.run(search_and_extract_keywords(main_keyword))
