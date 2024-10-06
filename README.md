@@ -11,6 +11,9 @@ The SEO Analyzer is a user-friendly web application designed to help non-technic
 - **Performance Tracking**: Monitor key metrics and write effective Article.
 - **User-Friendly Interface**: Simple and intuitive design that makes SEO analysis accessible for everyone.
 
+## STATUS
+- under development not production ready
+
 ## Getting Started
 
 ### Prerequisites
