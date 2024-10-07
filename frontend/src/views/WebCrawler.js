@@ -52,7 +52,7 @@ function WebCrawler() {
             <input
               type="text"
               className="form__input"
-              placeholder="Enter URL"
+              placeholder="Enter Main Keyword"
               value={keyword}
               onChange={(e) => setKeyword(e.target.value)}
               required
